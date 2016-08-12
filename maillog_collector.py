@@ -4,6 +4,31 @@ import time
 import subprocess
 import select
 from pprint import pprint
+from datetime import datetime
+
+
+def convert_to_epoch(logvalues):
+    """Function to convert the log's timestamps (which do not include a date)
+    to EPOCH time.  this function is meant to slurp in the line in a basic
+    whitespace split'ed list - meaning the first 3 list items will be as
+    follows:"""
+
+    # Example List: ['Aug', '1', '07:32:18', 'ip-172-31-29-11', ...]
+    d = datetime.today()
+    current_year = d.year
+
+    log_month = logvalues[0]
+    log_day = logvalues[1]
+    log_time = logvalues[2]
+
+    log_time_hh = log_time.split(':')[0]
+    log_time_mm = log_time.split(':')[1]
+    log_time_ss = log_time.split(':')[2]
+
+    epoch_ts = time.mktime(current_year, log_month,
+                           log_day, log_time_hh,
+                           log_time_mm, log_time_ss)
+    return epoch_ts
 
 
 def get_pipe_stats(logvalues):
@@ -14,8 +39,8 @@ def get_pipe_stats(logvalues):
     print logvalues
 
 
-def strip_connecting_ip(logpart):
-    """A function for stripping out connecting hostname/ips.
+def extract_connecting_ip(logpart):
+    """A function for extracting out connecting hostname/ips.
     For example you may see:
         smtp.domain.com[1.1.1.1]
         - or -
@@ -27,7 +52,7 @@ def strip_connecting_ip(logpart):
     return smtp_ip
 
 
-def strip_email_address(logpart):
+def extract_email_address(logpart):
     """This function will pair a log entry's field wrappings around email
     addresses down to just the email address.
 
@@ -61,30 +86,30 @@ def get_postscreen_stats(logvalues):
 
     if 'DISCONNECT' in postscreen_action:
         # TODO: need to do something here
-        client = strip_connecting_ip(logvalues[6])
+        client = extract_connecting_ip(logvalues[6])
 
-    if 'CONNECT' == postscreen_action:
+    elif 'CONNECT' == postscreen_action:
         status = 'CONNECTED'
-        client = strip_connecting_ip(logvalues[7])
+        client = extract_connecting_ip(logvalues[7])
 
-    if 'HANGUP' in postscreen_action:
+    elif 'HANGUP' in postscreen_action:
         # Here it means that the incoming SMTP client didnt even handshake
         # properly and was most likely rejected
         # Example lines:
         #   HANGUP after 1.1 from [1.1.9.8]:20012 in tests after SMTP handshake
-        client = strip_connecting_ip(logvalues[9])
+        client = extract_connecting_ip(logvalues[9])
         status = 'SMTP_HANDSHAKE_REJECT'
 
-    if 'DNSBL' in postscreen_action:
+    elif 'DNSBL' in postscreen_action:
         # Here we process the DNSBL stats and info.
         # Example lines:
         #   DNSBL rank 2 for [1.1.1.1]:55000
         #   DNSBL rank 5 for [2.2.2.2]:20012
-        client = strip_connecting_ip(logvalues[9])
+        client = extract_connecting_ip(logvalues[9])
         dnsbl_rank = logvalues[7]
         status = "DNSBL CLASSIFICATION"
 
-    if 'NOQUEUE' in postscreen_action:
+    elif 'NOQUEUE' in postscreen_action:
         # Here the message was rejected, possibly SMTP codes 550, see RFC
         # 2821/821 for more information on this.  with iRedMail this is likely
         # due to greylisting
@@ -101,24 +126,25 @@ def get_postscreen_stats(logvalues):
         #   proto=ESMTP, helo=<smtp.baddomain.com>
         #
         smtp_subcode = logvalues[11]
-        client = strip_connecting_ip(logvalues[9])
+        client = extract_connecting_ip(logvalues[9])
         mail_from = None
         mail_to = None
         rejected_by = None
+        convert_to_epoch(logvalues)
 
         if '5.7.1' in smtp_subcode:
             status = "REJECT: 550"
             rejected_by = logvalues[18]
-            mail_from = strip_email_address(logvalues[19])
-            mail_to = strip_email_address(logvalues[20])
+            mail_from = extract_email_address(logvalues[19])
+            mail_to = extract_email_address(logvalues[20])
             print("To: {}, From: {}, Rejected by: {}").format(mail_to,
                                                               mail_from,
                                                               rejected_by)
 
-        if '5.5.1' in smtp_subcode:
+        elif '5.5.1' in smtp_subcode:
             status = "REJECT: Protocol Error"
-            mail_from = strip_email_address(logvalues[14])
-            mail_to = strip_email_address(logvalues[15])
+            mail_from = extract_email_address(logvalues[14])
+            mail_to = extract_email_address(logvalues[15])
 
     print client, status, dnsbl_rank, postscreen_action
 
@@ -156,48 +182,48 @@ def get_smtpd_stats(logvalues):
                 mail_from = logvalues[34]
                 smtp_status = 'Greylisted'
 
-            if smtp_code == '450' and reason_code == '4.1.8':
+            elif smtp_code == '450' and reason_code == '4.1.8':
                 # Sender Address Rejected, Sender's Domain not found
-                smtp_client = strip_connecting_ip(logvalues[5])
-                mail_from = strip_email_address(logvalues[8])
-                mail_to = strip_email_address(logvalues[16])
+                smtp_client = extract_connecting_ip(logvalues[5])
+                mail_from = extract_email_address(logvalues[8])
+                mail_to = extract_email_address(logvalues[16])
                 smtp_status = "Invalid Sender Domain"
 
-            if smtp_code == '550' and reason_code == '5.1.0':
+            elif smtp_code == '550' and reason_code == '5.1.0':
                 # Sender Address Rejected, user unknown in virtual mailbox
                 # table.  In this scenario, someone or some thing is attempting
                 # to use the local SMTP server as an open relay, but sneakily.
                 # They are usually using the local domain as the sending domain
                 # and then some other domain, say yahoo, google, hotmail as the
                 # recipient
-                smtp_client = strip_connecting_ip(logvalues[9])
-                mail_from = strip_email_address(logvalues[22])
-                mail_to = strip_email_address(logvalues[23])
+                smtp_client = extract_connecting_ip(logvalues[9])
+                mail_from = extract_email_address(logvalues[22])
+                mail_to = extract_email_address(logvalues[23])
                 smtp_status = "Invalid Sender"
 
-            if smtp_code == '550' and reason_code == '5.1.1':
+            elif smtp_code == '550' and reason_code == '5.1.1':
                 # Recipient Address Rejected, user unknown in virtual mailbox
                 # table.  This could be a mis-configuration of the local SMTP
                 # mailbox setup - the user specified in the "To:" field doesnt
                 # exist and the message is rejected.  This can also happen when
                 # the sending address is Null
-                smtp_client = strip_connecting_ip(logvalues[9])
-                mail_from = strip_email_address(logvalues[22])
-                mail_to = strip_email_address(logvalues[23])
+                smtp_client = extract_connecting_ip(logvalues[9])
+                mail_from = extract_email_address(logvalues[22])
+                mail_to = extract_email_address(logvalues[23])
                 smtp_status = "Invalid Recipient"
 
-            if smtp_code == '554':
+            elif smtp_code == '554':
                 # Sender access DENIED, sent from a dynamic IP range
-                smtp_client = strip_connecting_ip(logvalues[9])
-                mail_from = strip_email_address(logvalues[41])
-                mail_to = strip_email_address(logvalues[42])
+                smtp_client = extract_connecting_ip(logvalues[9])
+                mail_from = extract_email_address(logvalues[41])
+                mail_to = extract_email_address(logvalues[42])
                 smtp_status = "Bad sending server"
 
-            if 'connect' == message_id_or_status:
-                smtp_client = strip_connecting_ip(logvalues[7])
+            elif 'connect' == message_id_or_status:
+                smtp_client = extract_connecting_ip(logvalues[7])
 
-            if 'disconnect' in message_id_or_status:
-                smtp_client = strip_connecting_ip(logvalues[7])
+            elif 'disconnect' in message_id_or_status:
+                smtp_client = extract_connecting_ip(logvalues[7])
 
         print "Rejection information:\
                 SMTP Client: {} \
@@ -263,31 +289,31 @@ def parse_maillog(logline):
         print "FOUND [pipe]"
         get_pipe_stats(values)
 
-    if 'postfix/postscreen' in postfix_process_name:
+    elif 'postfix/postscreen' in postfix_process_name:
         print "FOUND [postscreen]"
         get_postscreen_stats(values)
 
-    if 'postfix/smtp[' in postfix_process_name:
+    elif 'postfix/smtp[' in postfix_process_name:
         print "FOUND [smtp]"
         get_smtp_stats(values)
 
-    if 'postfix/smtpd' in postfix_process_name:
+    elif 'postfix/smtpd' in postfix_process_name:
         print "FOUND [smtpD]"
         get_smtpd_stats(values)
 
-    if 'postfix/qmgr' in postfix_process_name:
+    elif 'postfix/qmgr' in postfix_process_name:
         print "FOUND [qmgr]"
         get_qmgr_stats(values)
 
-    if 'postfix/local' in postfix_process_name:
+    elif 'postfix/local' in postfix_process_name:
         print "FOUND [local]"
         get_local_stats(values)
 
-    if 'postfix/cleanup' in postfix_process_name:
+    elif 'postfix/cleanup' in postfix_process_name:
         print "FOUND [cleanup]"
         get_cleanup_stats(values)
 
-    if 'amavis[' in postfix_process_name:
+    elif 'amavis[' in postfix_process_name:
         print "FOUND [amavis]"
         get_amavis_stats(values)
 
